@@ -1,0 +1,284 @@
+---
+title: "Global Analysis of COVID-19 Data"
+author: "Omid Soufipour"
+date: "2023-03-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+## Introduction
+I conducted a data analysis of Covid 19 data for a course on the Master of Science in Data Science program at the **University of Colorado Boulder**. To complete the project, I utilized publicly available data from the [Johns Hopkins University](https://github.com/CSSEGISandData/COVID-19). The purpose of this analysis is to gain insights into the trends and statistics of COVID-19 worldwide. After over three years since the initial outbreak of COVID-19, I would like to examine the number of cases, deaths, and recoveries over the past three years in order to identify any changes in the number of cases, particularly the percentage of cases that have resulted in death.
+
+## Libraries
+I used only the **"tidyverse"** library for analyzing data and drawing plots. The library **"lubridate"** is also in the same package, but it needed to call seperately.
+
+
+```{r library}
+library(tidyverse)
+library(lubridate)
+
+```
+  
+## Data Analysis
+
+  For the purpose of data analysis, I performed the following steps:
+
+#### 1. Reading the data:
+  I retrieved the data from the website mentioned earlier and saved it in two files.
+
+```{r read}
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/" 
+file_names <- c("time_series_covid19_confirmed_US.csv",
+                "time_series_covid19_confirmed_global.csv",
+                "time_series_covid19_deaths_US.csv",
+                "time_series_covid19_deaths_global.csv")
+urls <- str_c(url_in, file_names)
+global_cases <- read_csv(urls[2])
+global_deaths <- read_csv(urls[4])
+
+
+```
+
+#### 2- Checking the data:
+  I need to examine the data to determine the type of analysis and any necessary modifications.
+
+```{r glimpse_data}
+head(global_cases)
+
+```
+
+
+
+#### 3- Transfoming data and removing unwanted columns:
+
+It seems that the first thing I should do with the data is to transform it from a wide format to a long format. After that, I need to join the two datasets together and save the resulting dataset in the "global_covid" folder.
+
+```{r transform_data}
+global_cases <- global_cases %>% 
+  pivot_longer(cols = -c("Province/State","Country/Region", "Lat", "Long" ),
+               names_to = "date", values_to = "cases")
+
+global_deaths <- global_deaths %>% 
+  pivot_longer(cols = -c("Province/State","Country/Region", "Lat", "Long" ),
+               names_to = "date", values_to = "deaths")
+
+global_covid <- global_cases %>%
+  full_join(global_deaths)
+
+global_covid <- global_covid %>% 
+  select (-c("Lat", "Long"))
+
+```
+
+
+#### 4- Renaming some columns:
+
+It's a good idea to rename the column names to names that are more suitable for R programming.
+  If you think it's the easy part, just read this quote from Phil Karlton:  
+     ”*There are only two hard things in Computer Science: cache invalidation and naming things.*”
+
+
+```{r rename_columns}
+global_covid <- global_covid %>%
+  rename (Country_Region = "Country/Region", Province_State = "Province/State" )
+
+```
+
+
+#### 5- Other changes to the data frame:
+
+  Now is a good opportunity to make additional modifications to the dataframe. First, I will change the date column to the standard date format. Second, I will filter the data to show only rows with cases greater than zero.
+  
+  
+
+```{r date_format}
+global_covid <- global_covid %>%
+  mutate(date = mdy(date))
+
+global_covid <- global_covid %>%
+  filter(cases>0)
+```
+
+
+Next, I added a column named "Population" to display the populations of all countries. I retrieved the data once again from the John Hopkins website.
+
+
+```{r pop}
+pop_url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv"
+
+population<- read_csv(pop_url) %>% 
+  select(-c(Lat, Long_, Combined_Key, code3, iso2, iso3, Admin2, FIPS, UID))
+
+
+global_covid <- global_covid %>%
+  left_join(population , by = c("Province_State", "Country_Region"))
+```
+
+
+When I examined the data carefully, I discovered something strange. In numerous countries and on various dates, the data appears to be incorrect. For instance, when I attempted to view the daily cases in France using the code below, I generated a table of new cases and new deaths, and on several days, the numbers were negative. This suggests that our data is not cumulative for all dates.
+
+```{r time_day}
+france_covid <- subset(global_covid, Country_Region == "France")
+new_cases <- c(NA, diff(france_covid$cases))
+new_deaths <- c(NA, diff(france_covid$deaths))
+france_daily <- data.frame(date = france_covid$date,
+                           new_cases = new_cases,
+                           new_deaths = new_deaths)
+france_daily <- france_daily %>%
+  arrange(new_cases)
+head(france_daily)
+```
+
+
+  
+
+## Plots
+
+  I want to start by plotting the number of COVID cases per date. To do this, I will add two new columns that show the number of new cases and deaths. Next, I will remove some outlier data and then plot the number of cases per million.
+
+
+```{r plot1}
+global_covid <- global_covid %>%
+  group_by(Province_State, Country_Region) %>%
+  mutate(new_cases = cases - lag(cases, default = 0),
+         new_deaths = deaths - lag(deaths, default = 0))
+
+new_cases_deaths <- global_covid %>%
+  group_by(date) %>%
+  summarise(new_cases = sum(new_cases),
+            new_deaths = sum(new_deaths))
+
+global_covid_filtered <- new_cases_deaths %>%
+  filter(!(date >= "2020-01-01" & date < "2021-06-01" & new_cases > 1000000))
+
+
+
+ggplot(global_covid_filtered, aes(x = date)) +
+  geom_area(aes(y = new_cases/1000000, color = "New Cases ")) +
+  labs(title = "New Cases per Day",
+       y = "Number of Cases per Million")
+```
+
+  I will do the same for new deaths and plot, but this time I will plot the number of deaths per thousand people per day.
+  
+  
+
+```{r plot2}
+global_death_filtered <- new_cases_deaths %>%
+  filter(!(date >= "2022-06-01" & new_deaths > 5000 )) %>% 
+  filter(!(date >= "2022-01-01" & new_deaths > 15000 )) %>% 
+  filter(!(date >= "2021-06-01" & new_deaths > 20000 )) %>% 
+  filter(!(date >= "2020-05-20" & date < "2021-05-27" & new_deaths < 2500 ))
+  
+  
+
+ggplot(global_death_filtered, aes(x = date)) +
+  geom_area(aes(y = new_deaths/1000, color = "New Cases ")) +
+  labs(title = "New Deaths per Day",
+       y = "Number of Deaths per Thousand")
+
+
+```  
+
+
+I am now going to analyze which countries have the highest number of COVID-19 cases per capita, based on their population.
+
+```{r plot3}
+global_covid_sum <- global_covid %>%
+  group_by(Country_Region, date) %>%
+  summarise(cases = sum(cases),
+            deaths = sum(deaths),
+            Population = sum(Population)) %>%
+  ungroup()
+
+
+global_covid_perc <- global_covid_sum %>%
+  group_by(Country_Region) %>%
+  summarise(max_cases = max(cases),
+            max_deaths = max(deaths),
+            Population = first(Population)) %>%
+  mutate(perc_cases = max_cases / Population * 100,
+         perc_deaths = max_deaths / Population * 100)
+
+
+top_5_cases <- global_covid_perc %>%
+  arrange(desc(perc_cases)) %>%
+  head(5)
+
+ggplot(top_5_cases, aes(x = reorder(Country_Region, -perc_cases), y = perc_cases)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "Top 5 countries with the most percentage of cases",
+       x = "Country",
+       y = "Percentage of cases")+
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1))
+
+```
+
+Afterwards, for the final plot, I will graph the number of deaths per capita in countries with the highest COVID death rates.
+
+
+```{r plot4}
+top_5_deaths <- global_covid_perc %>%
+  arrange(desc(perc_deaths)) %>%
+  head(5)
+
+ggplot(top_5_deaths, aes(x = reorder(Country_Region, -perc_deaths), y = perc_deaths)) +
+  geom_bar(stat = "identity", fill = "red") +
+  labs(title = "Top 5 countries with the most percentage of deaths",
+       x = "Country",
+       y = "Percentage of deaths")+
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1))
+```
+
+
+
+## Define a Model
+
+  As the final step of my project, I aim to define a model that demonstrates the correlation between the number of deaths and number of cases in Germany.
+
+```{r model}
+countries <- c("Germany")
+Germany_covid <- global_covid %>% filter(Country_Region %in% countries)
+
+Germany <- Germany_covid %>%
+  group_by(Country_Region, date) %>%
+  summarise(cases = sum(cases),
+            deaths = sum(deaths)) %>%
+  ungroup()
+
+model <- lm(deaths ~ cases, data = Germany)
+
+summary(model)
+```
+
+  and here is the plot of this simple model:
+
+```{r model_plot}
+Germany %>%
+  ggplot(aes(x = cases, y = deaths)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  labs(x = "Number of Cases", y = "Number of Deaths",
+       title = "Linear Model between Covid 19 Cases and Deaths in Germany") +
+  theme_bw()
+
+```
+
+
+
+## Conclusion and potential biases
+
+  Based on the project and the plots I have created, the following conclusions can be drawn:
+
+1. I concluded that over time, the number of new cases is decreasing, although we have experienced some fluctuations. For example, during the first few months of 2022, we had more new cases than ever before.
+
+2. The other, more important conclusion is the number of new deaths. We can conclude that vaccinations have a good effect on this number.
+
+3. Regarding biases in this project, there are several to consider. First, while data from the John Hopkins University is likely the most complete in the world, many countries did not publish their data. This creates some uncertainty about our conclusions and analysis. Countries like Burundi (with 0.1% fully vaccinated), Eritrea (with 0.3% fully vaccinated), North Korea (with 0.3% fully vaccinated), and Tanzania (with 0.4% fully vaccinated) had no data in this dataframe. Therefore, we cannot confidently talk about the effects of vaccines. Another important issue is the lack of data on which vaccine companies administered their vaccines in each country. Additionally, an essential aspect of this project is the reliability of countries' statistics. Several countries may manipulate their data for various reasons. 
+4. The last subject I want to mention is that fewer people are testing for COVID-19. For instance, in the country where I live, Germany, rapid testing was free for everyone, but now it is no longer free, resulting in fewer people testing themselves.  These are crucial factors that we should consider before making any decisions.
